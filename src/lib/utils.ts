@@ -2585,7 +2585,7 @@ export async function setupOAuthCallbackServerWithLongPoll(options: OAuthCallbac
   // elsewhere would advertise a redirect_uri no browser can deliver a code to. EADDRINUSE is a
   // signal that somebody else owns this flow, and the caller decides what to do about it.
   const { server, actualPort } = await new Promise<{ server: Server; actualPort: number }>((resolve, reject) => {
-    const httpServer = app.listen(options.port, '127.0.0.1')
+    const httpServer = app.listen(options.port, options.bindHost ?? DEFAULT_BIND_HOST)
 
     httpServer.once('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
@@ -2599,7 +2599,7 @@ export async function setupOAuthCallbackServerWithLongPoll(options: OAuthCallbac
 
     httpServer.once('listening', () => {
       const addr = httpServer.address() as AddressInfo
-      log(`OAuth callback server running at http://127.0.0.1:${addr.port}`)
+      log(`OAuth callback server running at http://${formatHostForUrl(addr.address)}:${addr.port}`)
       resolve({ server: httpServer, actualPort: addr.port })
     })
   })
@@ -2644,6 +2644,14 @@ const LONG_POLL_PATH = '/wait-for-auth'
  * registered with the authorization server and the value checked against a cached
  * registration must match exactly - see invalidateMismatchedClientRegistration.
  */
+/** Loopback only by default: nothing off this machine should be able to hand us an authorization code. */
+export const DEFAULT_BIND_HOST = '127.0.0.1'
+
+/** An address as it has to appear in a URL authority, where an IPv6 literal needs brackets. */
+export function formatHostForUrl(address: string): string {
+  return address.includes(':') && !address.startsWith('[') ? `[${address}]` : address
+}
+
 export function buildRedirectUrl(host: string, port: number, callbackPath: string = DEFAULT_CALLBACK_PATH): string {
   return `http://${host}:${port}${callbackPath}`
 }
@@ -2959,6 +2967,16 @@ export async function parseCommandLineArgs(args: string[], usage: string) {
     log(`Using callback hostname: ${host}`)
   }
 
+  // Parse the address the callback server binds to. Separate from `--host`, which only names the
+  // host in the redirect_uri: in a container the browser reaches a published port on the host while
+  // the server has to listen on all interfaces (0.0.0.0) for that traffic to arrive at all.
+  let bindHost = DEFAULT_BIND_HOST
+  const bindHostIndex = args.indexOf('--bind-host')
+  if (bindHostIndex !== -1 && bindHostIndex < args.length - 1) {
+    bindHost = args[bindHostIndex + 1]
+    log(`Binding the OAuth callback server to: ${bindHost}`)
+  }
+
   // Parse callback path. It has to be a path Express can route and that does not shadow the
   // long-poll endpoint the coordination protocol between concurrent instances relies on,
   // otherwise the authorization server redirects back to an endpoint that never resolves.
@@ -3257,6 +3275,7 @@ export async function parseCommandLineArgs(args: string[], usage: string) {
     keepAlive,
     protocolMode,
     authSuccessUrl,
+    bindHost,
   }
 }
 
